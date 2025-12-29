@@ -1,4 +1,5 @@
 # pylint: disable=protected-access
+from sqlalchemy import text
 import model
 import repository
 
@@ -11,18 +12,18 @@ def test_repository_can_save_a_batch(session):
     session.commit()
 
     rows = session.execute(
-        'SELECT reference, sku, _purchased_quantity, eta FROM "batches"'
+        text('SELECT reference, sku, _purchased_quantity, eta FROM "batches"')
     )
     assert list(rows) == [("batch1", "RUSTY-SOAPDISH", 100, None)]
 
 
 def insert_order_line(session):
     session.execute(
-        "INSERT INTO order_lines (orderid, sku, qty)"
-        ' VALUES ("order1", "GENERIC-SOFA", 12)'
+        text("INSERT INTO order_lines (orderid, sku, qty)"
+             ' VALUES ("order1", "GENERIC-SOFA", 12)')
     )
     [[orderline_id]] = session.execute(
-        "SELECT id FROM order_lines WHERE orderid=:orderid AND sku=:sku",
+        text("SELECT id FROM order_lines WHERE orderid=:orderid AND sku=:sku"),
         dict(orderid="order1", sku="GENERIC-SOFA"),
     )
     return orderline_id
@@ -30,12 +31,12 @@ def insert_order_line(session):
 
 def insert_batch(session, batch_id):
     session.execute(
-        "INSERT INTO batches (reference, sku, _purchased_quantity, eta)"
-        ' VALUES (:batch_id, "GENERIC-SOFA", 100, null)',
+        text("INSERT INTO batches (reference, sku, _purchased_quantity, eta)"
+             ' VALUES (:batch_id, "GENERIC-SOFA", 100, null)'),
         dict(batch_id=batch_id),
     )
     [[batch_id]] = session.execute(
-        'SELECT id FROM batches WHERE reference=:batch_id AND sku="GENERIC-SOFA"',
+        text('SELECT id FROM batches WHERE reference=:batch_id AND sku="GENERIC-SOFA"'),
         dict(batch_id=batch_id),
     )
     return batch_id
@@ -43,8 +44,8 @@ def insert_batch(session, batch_id):
 
 def insert_allocation(session, orderline_id, batch_id):
     session.execute(
-        "INSERT INTO allocations (orderline_id, batch_id)"
-        " VALUES (:orderline_id, :batch_id)",
+        text("INSERT INTO allocations (orderline_id, batch_id)"
+             " VALUES (:orderline_id, :batch_id)"),
         dict(orderline_id=orderline_id, batch_id=batch_id),
     )
 
@@ -65,3 +66,27 @@ def test_repository_can_retrieve_a_batch_with_allocations(session):
     assert retrieved._allocations == {
         model.OrderLine("order1", "GENERIC-SOFA", 12),
     }
+
+
+def test_repository_can_save_batch_with_multiple_allocations(session):
+    batch = model.Batch("batch1", "BLUE-VASE", 100, eta=None)
+    line1 = model.OrderLine("order1", "BLUE-VASE", 10)
+    line2 = model.OrderLine("order2", "BLUE-VASE", 20)
+    line3 = model.OrderLine("order3", "BLUE-VASE", 15)
+    
+    batch.allocate(line1)
+    batch.allocate(line2)
+    batch.allocate(line3)
+
+    repo = repository.SqlAlchemyRepository(session)
+    repo.add(batch)
+    session.commit()
+
+    # Retrieve the batch and verify allocations
+    retrieved = repo.get("batch1")
+    assert retrieved.reference == "batch1"
+    assert retrieved.sku == "BLUE-VASE"
+    assert retrieved._purchased_quantity == 100
+    assert retrieved.available_quantity == 55  # 100 - 10 - 20 - 15
+    assert len(retrieved._allocations) == 3
+    assert retrieved._allocations == {line1, line2, line3}
